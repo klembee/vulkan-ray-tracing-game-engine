@@ -50,7 +50,10 @@ struct QueueFamilyIndices {
 
 struct ModelMatrix {
     glm::mat4 *model = nullptr;
-    glm::vec4 arrayIndex;
+};
+
+struct BoneMatrices{
+    glm::mat4 *transforms = nullptr;
 };
 
 struct CameraMatrices {
@@ -107,9 +110,17 @@ private:
     std::vector<VkBuffer> cameraUniformBuffers;
     std::vector<VkDeviceMemory> cameraUniformBufferMemory;
 
+    std::vector<VkBuffer> boneUniformBuffers;
+    std::vector<VkDeviceMemory> boneUniformBufferMemory;
+
     ModelMatrix uboInstance = {};
+    BoneMatrices boneMatrices = {};
     size_t uniformDynamicAlignment;
 
+    VkBuffer vertexBuffer;
+    VkDeviceMemory vertexBufferMemory;
+    uint32_t nbVertices = 0;
+    uint32_t nbIndices = 0;
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
 
@@ -121,10 +132,8 @@ private:
     VkDeviceMemory colorImageMemory;
     VkImageView colorImageView;
 
-    Camera camera = nullptr;
 
-    VkBuffer vertexBuffer;
-    VkDeviceMemory vertexBufferMemory;
+    Camera camera = nullptr;
 
     VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_1_BIT;
 
@@ -145,11 +154,11 @@ private:
     void createSurface();
     void pickPhysicalDevice();
     void createLogicalDevice();
-    void createVertexBuffer();
     void createUniformBuffers();
     void createSwapChain();
     void recreateSwapChain();
     void createImageViews();
+    void createVertexBuffers();
     void createRenderPass();
     void createDescriptorSetLayout();
     void createGraphicsPipeline();
@@ -157,8 +166,6 @@ private:
     void createColorResources();
     void createDepthResources();
     void createFrameBuffers();
-    void createDescriptorPool();
-    void createDescriptorSets();
     void createCommandBuffers();
     void createSyncObjects();
 
@@ -201,6 +208,8 @@ public:
     uint32_t getSwapChainImagesCount();
     VkDescriptorSetLayout getDescriptorSetLayout();
     VkBuffer getModelUniformBuffer(uint32_t index);
+    VkBuffer getCameraUniformBuffer(uint32_t index);
+    VkBuffer getBoneUniformBuffer(uint32_t index);
 
     VkPhysicalDevice getPhysicalDevice();
     VkQueue getGraphicsQueue();

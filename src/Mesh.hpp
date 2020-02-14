@@ -14,8 +14,6 @@ class Texture;
 
 class Mesh {
 private:
-
-
     Application *application;
     VkDevice device;
 public:

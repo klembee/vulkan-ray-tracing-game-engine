@@ -2,9 +2,11 @@
 // Created by cleme on 2020-02-03.
 //
 #include <vector>
+#include <zconf.h>
 #include "../include/helper/FileHelper.hpp"
 #include "Application.hpp"
 #include "glm/ext.hpp"
+#include <unistd.h>
 
 const int WIDTH = 1600;
 const int HEIGHT = 1200;
@@ -206,37 +208,49 @@ void Application::updateUniformBuffer(uint32_t currentImage) {
     projview.proj = this->camera.getProjectionMatrix();
     projview.proj[1][1] *= -1;
 
-    VkCommandBuffer commandBuffer = this->beginSingleTimeCommands(this->commandPool);
-
-    vkCmdPushConstants(commandBuffer,
-            this->pipelineLayout,
-            VK_SHADER_STAGE_VERTEX_BIT,
-            0,
-            sizeof(CameraMatrices),
-            &projview);
-
-    this->endSingleTimeCommands(this->graphicsQueue, this->commandPool, commandBuffer);
-
-//    void *data2;
-//    vkMapMemory(this->device, this->cameraUniformBufferMemory[currentImage], 0, sizeof(CameraMatrices), 0, &data2);
-//    memcpy(data2, &projview, sizeof(CameraMatrices));
-//    vkUnmapMemory(this->device, cameraUniformBufferMemory[currentImage]);
 
     //Send the model matrix as uniform
     for(size_t i = 0 ; i < this->models.size() ; i++){
         Model *model = this->models[i];
         glm::mat4 *modelMat = (glm::mat4*)(((uint64_t)uboInstance.model + (i * this->uniformDynamicAlignment)));
+        glm::mat4 *boneMatrix = (glm::mat4*)(((uint64_t)this->boneMatrices.transforms) + (i * 100 * this->uniformDynamicAlignment));
 
         *modelMat = model->getModelMatrix();
+
+        std::vector<glm::mat4> boneTransforms(100);
+        model->getBoneTransforms(time, boneTransforms);
+
+        for(size_t boneIndex = 0 ; boneIndex < 100 ; boneIndex++){
+            if(boneIndex < boneTransforms.size()) {
+                boneMatrix[boneIndex] = boneTransforms[boneIndex];
+            }else{
+                boneMatrix[boneIndex] = glm::mat4(1.0f);
+            }
+        }
     }
 
     //Copy data to buffer
     void *data;
-    size_t buffersize = this->models.size() * this->uniformDynamicAlignment;
+    size_t boneMatricesBufferSize = this->models.size() * 100 * this->uniformDynamicAlignment;
+    size_t modelMatrixBuffersize = this->models.size() * this->uniformDynamicAlignment;
+    size_t viewMatricesBufferSize = sizeof(CameraMatrices);
 
-    vkMapMemory(this->device, this->modelUniformBufferMemory[currentImage], 0, buffersize, 0, &data);
-    memcpy(data, &this->uboInstance.model[0], buffersize);
+    //Camera matrices data
+    vkMapMemory(this->device, this->cameraUniformBufferMemory[currentImage], 0, viewMatricesBufferSize, 0, &data);
+    memcpy(data, &projview, viewMatricesBufferSize);
+    vkUnmapMemory(this->device, this->cameraUniformBufferMemory[currentImage]);
+
+
+    void *data2;
+    //Model matrices data
+    vkMapMemory(this->device, this->modelUniformBufferMemory[currentImage], 0, modelMatrixBuffersize, 0, &data2);
+    memcpy(data2, &this->uboInstance.model[0], modelMatrixBuffersize);
     vkUnmapMemory(this->device, modelUniformBufferMemory[currentImage]);
+
+    //Bone matrices data
+    vkMapMemory(this->device, this->boneUniformBufferMemory[currentImage], 0, boneMatricesBufferSize, 0, &data2);
+    memcpy(data2, &this->boneMatrices.transforms[0], boneMatricesBufferSize);
+    vkUnmapMemory(this->device, boneUniformBufferMemory[currentImage]);
 }
 
 
@@ -251,7 +265,7 @@ void Application::initVulkan() {
     this->createRenderPass();
     this->createDescriptorSetLayout();
     this->createCommandPool();
-
+    printf("1\n");
     this->models = {
             new Model(this, this->device),
 //            new Model(this, this->device, glm::vec3(0.0f, 0.0f, 50.0f)),
@@ -259,7 +273,7 @@ void Application::initVulkan() {
 //            new Model(this, this->device, glm::vec3(50.0f, 0.0f, 50.0f))
     };
 
-    this->createVertexBuffer();
+    this->createVertexBuffers();
     this->createUniformBuffers();
     this->createGraphicsPipeline();
     this->createColorResources();
@@ -724,14 +738,30 @@ void Application::createDescriptorSetLayout(){
     modelLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     modelLayoutBinding.pImmutableSamplers = nullptr;
 
+    //Camera matrices
+    VkDescriptorSetLayoutBinding viewMatricesBinding = {};
+    viewMatricesBinding.binding = 1;
+    viewMatricesBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    viewMatricesBinding.descriptorCount = 1;
+    viewMatricesBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    viewMatricesBinding.pImmutableSamplers = nullptr;
+
+    VkDescriptorSetLayoutBinding bonesLayoutBinding = {};
+    bonesLayoutBinding.binding = 2;
+    bonesLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    bonesLayoutBinding.descriptorCount = 1;
+    bonesLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    bonesLayoutBinding.pImmutableSamplers = nullptr;
+
     VkDescriptorSetLayoutBinding samplerLayoutBinding = {};
-    samplerLayoutBinding.binding = 1;
+    samplerLayoutBinding.binding = 3;
     samplerLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     samplerLayoutBinding.descriptorCount = 8;
     samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     samplerLayoutBinding.pImmutableSamplers = nullptr;
 
-    std::array<VkDescriptorSetLayoutBinding, 2> bindings = {modelLayoutBinding, samplerLayoutBinding};
+
+    std::array<VkDescriptorSetLayoutBinding, 4> bindings = {modelLayoutBinding, viewMatricesBinding, bonesLayoutBinding, samplerLayoutBinding};
 
     VkDescriptorSetLayoutCreateInfo layoutInfo = {};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -743,60 +773,53 @@ void Application::createDescriptorSetLayout(){
     }
 }
 
-void Application::createVertexBuffer(){
-
+void Application::createVertexBuffers() {
     for(Model *model : this->models){
-        for(Vertex vertice : model->getVertices()){
-            this->vertices.push_back(vertice);
+        for(Vertex vertex : model->getVertices()){
+            vertices.push_back(vertex);
         }
-
-        for(uint32_t indice : model->getIndices()){
-            //+ totalNumberIndices of have disctinct indices between models
-            this->indices.push_back(indice);
+        for(uint32_t index : model->getIndices()){
+            indices.push_back(index);
         }
     }
 
+    VkDeviceSize vertexBufferSize = sizeof(vertices[0]) * vertices.size();
+    VkDeviceSize indexBufferSize = sizeof(uint32_t) * indices.size();
 
-
-    VkDeviceSize vertexBufferSize = sizeof(this->vertices[0]) * this->vertices.size();
-    VkDeviceSize indexBufferSize = sizeof(this->indices[0]) * this->indices.size();
+    this->nbVertices = vertices.size();
+    this->nbIndices = indices.size();
 
     VkBuffer stagingBuffer;
     VkDeviceMemory stagingBufferMemory;
 
-    printf("%d\n", sizeof(this->vertices[0]));
 
     //To CPU
     this->createBuffer(vertexBufferSize + indexBufferSize,
-                                    VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                                    stagingBuffer,
-                                    stagingBufferMemory);
-
-
+                              VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                              stagingBuffer,
+                              stagingBufferMemory);
     void *data;
-    vkMapMemory(this->device, stagingBufferMemory, 0, vertexBufferSize, 0, &data);
-    memcpy(data, this->vertices.data(), (size_t)vertexBufferSize);
-    vkUnmapMemory(this->device, stagingBufferMemory);
-
+    vkMapMemory(device, stagingBufferMemory, 0, vertexBufferSize, 0, &data);
+    memcpy(data, vertices.data(), (size_t)vertexBufferSize);
+    vkUnmapMemory(device, stagingBufferMemory);
 
     //Add the index data after vertex data
-    vkMapMemory(this->device, stagingBufferMemory, vertexBufferSize, indexBufferSize, 0, &data);
-    memcpy(data, this->indices.data(), (size_t)indexBufferSize);
-    vkUnmapMemory(this->device, stagingBufferMemory);
-
-
+    vkMapMemory(device, stagingBufferMemory, vertexBufferSize, indexBufferSize, 0, &data);
+    memcpy(data, indices.data(), (size_t)indexBufferSize);
+    vkUnmapMemory(device, stagingBufferMemory);
 
     //To GPU
     this->createBuffer(vertexBufferSize + indexBufferSize,
-                                    VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                                    this->vertexBuffer,
-                                    this->vertexBufferMemory);
+                              VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                              VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                              this->vertexBuffer,
+                              this->vertexBufferMemory);
 
     this->copyBuffer(stagingBuffer, this->vertexBuffer, vertexBufferSize + indexBufferSize);
-    vkDestroyBuffer(this->device, stagingBuffer, nullptr);
-    vkFreeMemory(this->device, stagingBufferMemory, nullptr);
+
+    vkDestroyBuffer(device, stagingBuffer, nullptr);
+    vkFreeMemory(device, stagingBufferMemory, nullptr);
 }
 
 void Application::createUniformBuffers(){
@@ -809,28 +832,41 @@ void Application::createUniformBuffers(){
         this->uniformDynamicAlignment = (this->uniformDynamicAlignment + minUboAlignment - 1) & ~(minUboAlignment - 1);
     }
 
-    size_t bufferSize = this->models.size() * this->uniformDynamicAlignment;
-    this->uboInstance.model = (glm::mat4*)alignedAlloc(bufferSize, this->uniformDynamicAlignment);
+    size_t modelMatrixBufferSize = this->models.size() * this->uniformDynamicAlignment;
+    size_t viewMatricesBufferSize = sizeof(CameraMatrices);
+    size_t boneMatricesBufferSize = this->models.size() * 100 * this->uniformDynamicAlignment;
+
+    this->uboInstance.model = (glm::mat4*)alignedAlloc(modelMatrixBufferSize, this->uniformDynamicAlignment);
+    this->boneMatrices.transforms = (glm::mat4*)alignedAlloc(boneMatricesBufferSize, this->uniformDynamicAlignment);
 
     this->modelUniformBuffers.resize(swapChainImages.size());
     this->modelUniformBufferMemory.resize(swapChainImages.size());
     this->cameraUniformBuffers.resize(swapChainImages.size());
     this->cameraUniformBufferMemory.resize(swapChainImages.size());
+    this->boneUniformBuffers.resize(swapChainImages.size());
+    this->boneUniformBufferMemory.resize(swapChainImages.size());
 
     for(size_t i = 0; i < this->swapChainImages.size() ; i++){
         //Create the uniform for model data
-        this->createBuffer(bufferSize,
+        this->createBuffer(modelMatrixBufferSize,
                 VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                 this->modelUniformBuffers[i],
                 this->modelUniformBufferMemory[i]);
 
         //Create the uniform for camera data
-        this->createBuffer(sizeof(CameraMatrices),
+        this->createBuffer(viewMatricesBufferSize,
                 VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                 this->cameraUniformBuffers[i],
                 this->cameraUniformBufferMemory[i]);
+
+        //Create the bone matrices uniform data
+        this->createBuffer(boneMatricesBufferSize,
+                    VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                    this->boneUniformBuffers[i],
+                    this->boneUniformBufferMemory[i]);
     }
 }
 
@@ -1289,14 +1325,6 @@ void Application::endSingleTimeCommands(VkQueue queue, VkCommandPool commandPool
     vkFreeCommandBuffers(this->device, commandPool, 1, &commandBuffer);
 }
 
-void Application::createDescriptorPool(){
-
-}
-
-void Application::createDescriptorSets(){
-
-}
-
 uint32_t Application::findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties){
     VkPhysicalDeviceMemoryProperties memoryProperties;
     vkGetPhysicalDeviceMemoryProperties(this->physicalDevice, &memoryProperties);
@@ -1349,23 +1377,21 @@ void Application::createCommandBuffers(){
         vkCmdBeginRenderPass(this->commandBuffers[i], &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
         vkCmdBindPipeline(this->commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
 
+        VkDeviceSize indicesOffset = sizeof(Vertex) * this->nbVertices;
         VkDeviceSize offsets[] = {0};
-        VkDeviceSize indicesOffset = sizeof(Vertex) * this->vertices.size();
-
-
 
         vkCmdBindVertexBuffers(commandBuffers[i], 0, 1, &this->vertexBuffer, offsets);
         vkCmdBindIndexBuffer(commandBuffers[i], this->vertexBuffer, indicesOffset, VK_INDEX_TYPE_UINT32);
 
         for(size_t j = 0 ; j < this->models.size() ; j++){
             Model *model = this->models[j];
-            uint32_t dynamicOffset = j * static_cast<uint32_t>(this->uniformDynamicAlignment);
+            uint32_t modelDynamicOffset = j * static_cast<uint32_t>(this->uniformDynamicAlignment);
 
-            VkDescriptorSet modelDescriptorSet =  model->getDescriptorSet(i);
-            vkCmdBindDescriptorSets(this->commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &modelDescriptorSet, 1,
-                                    &dynamicOffset);
+            VkDescriptorSet* modelDescriptorSet =  model->getDescriptorSet(i);
+            vkCmdBindDescriptorSets(this->commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, modelDescriptorSet, 1,
+                                    &modelDynamicOffset);
 
-            vkCmdDrawIndexed(commandBuffers[i], model->getIndices().size(), 1, 0, 0, 0);
+            vkCmdDrawIndexed(commandBuffers[i], this->nbIndices, 1, 0, 0, 0);
         }
 
         vkCmdEndRenderPass(this->commandBuffers[i]);
@@ -1425,8 +1451,6 @@ void Application::recreateSwapChain(){
     this->createColorResources();
     this->createDepthResources();
     this->createFrameBuffers();
-    this->createDescriptorPool();
-    this->createDescriptorSets();
     this->createUniformBuffers();
     this->createCommandBuffers();
 
@@ -1439,14 +1463,9 @@ void Application::cleanup() {
     }
 
     this->cleanupSwapChain();
-
-    vkDestroyBuffer(this->device, this->vertexBuffer, nullptr);
-    vkFreeMemory(this->device, this->vertexBufferMemory, nullptr);
-
     for(Model *model : this->models){
         model->cleanup();
     }
-
     if(this->uboInstance.model){
         alignedFree(this->uboInstance.model);
     }
@@ -1475,11 +1494,16 @@ void Application::cleanupSwapChain(){
         vkDestroyFramebuffer(this->device, framebuffer, nullptr);
     }
 
+    vkDestroyBuffer(this->device, this->vertexBuffer, nullptr);
+    vkFreeMemory(this->device, this->vertexBufferMemory, nullptr);
+
     for (size_t i = 0; i < swapChainImages.size(); i++) {
         vkDestroyBuffer(device, this->modelUniformBuffers[i], nullptr);
         vkFreeMemory(device, this->modelUniformBufferMemory[i], nullptr);
         vkDestroyBuffer(device, this->cameraUniformBuffers[i], nullptr);
         vkFreeMemory(device, this->cameraUniformBufferMemory[i], nullptr);
+        vkDestroyBuffer(device, this->boneUniformBuffers[i], nullptr);
+        vkFreeMemory(device, this->boneUniformBufferMemory[i], nullptr);
     }
 
     vkDestroyImageView(this->device, this->colorImageView, nullptr);
@@ -1571,4 +1595,12 @@ VkDescriptorSetLayout Application::getDescriptorSetLayout(){
 }
 VkBuffer Application::getModelUniformBuffer(uint32_t index){
     return this->modelUniformBuffers[index];
+}
+
+VkBuffer Application::getCameraUniformBuffer(uint32_t index){
+    return this->cameraUniformBuffers[index];
+}
+
+VkBuffer Application::getBoneUniformBuffer(uint32_t index){
+    return this->boneUniformBuffers[index];
 }

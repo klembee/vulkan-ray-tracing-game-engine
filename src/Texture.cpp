@@ -10,9 +10,13 @@
 Texture::Texture(Application *application, VkDevice &device){
     this->application = application;
     this->device = device;
+
+    this->createTextureImage("../textures/default.png");
 }
 
-Texture::Texture(Application *application, VkDevice &device, std::string texturePath) : Texture(application, device){
+Texture::Texture(Application *application, VkDevice &device, std::string texturePath){
+    this->application = application;
+    this->device = device;
     this->createTextureImage(texturePath);
 }
 
